@@ -355,3 +355,90 @@ int main(int argc, char *argv[])
 ### 3.注意事项
 
 * 理解文件的访问。
+## 6.xargs
+
+### 1.实验目的
+
+* 编写一个简化版UNIX的`xargs`程序：它从标准输入中按行读取，并且为每一行执行一个命令，将行作为参数提供给命令。你的解决方案应该在**user/xargs.c**
+
+* 例如：
+
+  ```c
+  $ echo hello too | xargs echo bye
+  bye hello too
+  $
+  ```
+
+* 其中左边命令执行的结果通过管道输入到右边，xargs中的命令以左边的每行结果为参数进行执行。
+
+### 2.实验代码：
+
+```c
+#include "kernel/types.h"
+#include "user/user.h"
+#include "kernel/param.h"
+
+#define MAX_BUF 512
+
+int main(int argc,char *argv[])
+{
+    char buf[MAX_BUF] = {0};
+    char *xargv[MAXARG] = {0};
+    int occupy = 0;
+    int end = 0;
+
+    for(int i = 1;i < argc;i++){
+        xargv[i-1] = argv[i];
+    }
+
+    //从左侧命令读入数据
+    while (!(end && occupy == 0)){
+        if (!end){
+            int remain = MAX_BUF - occupy;
+            int readBytes = read(0,buf + occupy,remain);
+            if (readBytes < 0){
+                fprintf(2,"READ ERROR!\n");
+            }
+            if (readBytes == 0){
+                close(0);
+                end = 1;
+            }
+            occupy += readBytes;
+        }
+        char *pos = strchr(buf,'\n');
+        //逐行分解执行命令
+        while (pos){
+            char xbuf[MAX_BUF+1] = {0};
+            memcpy(xbuf,buf,pos-buf);
+            xargv[argc-1] = xbuf;
+            //创建子程序进行执行
+            int ret = fork();
+            if (ret == 0){
+                if (!end){
+                    close(0);
+                }
+                if (exec(argv[1],xargv) < 0){
+                    fprintf(2,"EXEC ERROR!\n");
+                    exit(1);
+                }
+            }
+            //处理已执行的数据
+            else {
+                memmove(buf,pos+1,occupy-(pos-buf)-1);
+                occupy -= pos - buf + 1;
+                memset(buf + occupy,0,MAX_BUF - occupy);
+                int pid;
+                wait(&pid);
+                
+                pos = strchr(buf,'\n');
+            }
+        }
+    }
+    exit(0);
+}
+```
+
+### 3.注意事项
+
+* 正确理解标准输入流的读取方式。
+* 对传入的参数进行理解`argc`和`argv`。
