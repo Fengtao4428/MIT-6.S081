@@ -288,3 +288,104 @@ proc_kptinithart(pagetable_t kpagetable)
 
 ![image-20240318235635612](image-20240318235635612.png)
 
+## Simplify copy/ copyinstr
+
+### 1.实验内容
+
+> 将定义在***kernel/vm.c***中的`copyin`的主题内容替换为对`copyin_new`的调用（在***kernel/vmcopyin.c***中定义）；对`copyinstr`和`copyinstr_new`执行相同的操作。为每个进程的内核页表添加用户地址映射，以便`copyin_new`和`copyinstr_new`工作。如果`usertests`正确运行并且所有`make grade`测试都通过，那么你就完成了此项作业。
+
+### 2.示例及提示
+
+* 一些提示：
+
+> * 先用对`copyin_new`的调用替换`copyin()`，确保正常工作后再去修改`copyinstr`
+> * 在内核更改进程的用户映射的每一处，都以相同的方式更改进程的内核页表。包括`fork()`, `exec()`, 和`sbrk()`.
+> * 不要忘记在`userinit`的内核页表中包含第一个进程的用户页表
+> * 用户地址的PTE在进程的内核页表中需要什么权限？(在内核模式下，无法访问设置了`PTE_U`的页面）
+> * 别忘了上面提到的PLIC限制
+
+### 3.实验过程及代码
+
+* 根据提示首先修改`copyin()`和`copyinstr()`函数，在内部调用事先准备好的`copyin_new()`和`copyinstr_new()`函数。如下所示：
+  ![image-20240415192046125](image-20240415192046125.png)![image-20240415192134430](image-20240415192134430.png)
+
+  接着在***kernel/defs.h***中添加对应函数声明，如下所示：
+  ![image-20240415192245370](image-20240415192245370.png)
+
+* 修改内核更改进程的用户映射的每一处，首先修改`fork()`函数，如下所示：
+
+  ```c
+    // 将进程页表的mapping，复制一份到进程内核页表
+    for (j = 0;j < p->sz; j+=PGSIZE){
+      pte = walk(np->pagetable, j, 0);
+      kernelPte = walk(np->kpagetable, j, 1);
+      *kernelPte = (*pte) & ~PTE_U;
+    }
+  ```
+
+  这段代码通过`walk()`函数访问`np`的页表，查找虚拟地址对应的PTE，然后合区内核页表页表条目，最后及那个用户级页表条目复制到内核页表条目。
+
+* 同理，根据上面对`fork()`函数的修改，对`exec()`进行修改，添加如下代码：
+
+  ```c
+    pte_t *pte, *kernelPte;
+    // 释放进程旧内核页表映射
+    uvmunmap(p->kpagetable, 0, PGROUNDUP(oldsz)/PGSIZE,0);
+    // 将进程页表的mapping，复制一份到进程内核页表
+    for (int j = 0;j < sz;j += PGSIZE){
+      pte = walk(pagetable, j, 0);
+      kernelPte = walk(p->kpagetable, j, 1);
+      *kernelPte = (*pte) & ~PTE_U;
+    }
+  ```
+
+  并按照提示添加用户地址空间不能大于PLIC的判断：
+
+  ```c
+    // Load program into memory.
+  	// ~
+      if (sz1 >= PLIC){
+        goto bad;
+      }
+  	// ~
+    }
+  ```
+
+* 对`sbrk()`进行修改，添加如下代码段：
+
+  ```c
+    if (n > 0){
+      for (j = addr; j <addr +n; j += PGSIZE){
+        pte = walk(p->pagetable, j, 0);
+        kernelPte = walk(p->kpagetable, j, 1);
+        *kernelPte = (*pte) & ~PTE_U;
+      }
+    }else {
+      for (j = addr - PGSIZE; j >= addr + n; j -=PGSIZE){
+        uvmunmap(p->kpagetable, j, 1, 0);
+      }
+    }
+  ```
+
+  在内存进行扩张时，将一系列页面从用户模式转换为只能被内核访问；当内存进行缩小时，解除一定范围内的页面映射，但不删除底层物理页面也不清空其内容。
+
+* 修改`userinit()`函数，修改逻辑与`fork()`中的修改逻辑相同：
+
+  ```c
+    // 复制一份到内核页表
+    pte = walk(p->pagetable, 0, 0);
+    kernelPte = walk(p->kpagetable, 0, 1);
+    *kernelPte = (*pte) & ~PTE_U;
+  ```
+
+### 4.运行结果
+
+* 在命令行输入`./grade-lab-pgtbl usertests`，进行测试，测试通过，结果如下：
+
+  ![image-20240415194640232](image-20240415194640232.png)
+
+## 实验结果
+
+* 在命令行中输入`./grade-lab-pgtbl`命令，所有测试通过，分数为66/66，如下所示：
+
+![image-20240415195135127](image-20240415195135127.png)
