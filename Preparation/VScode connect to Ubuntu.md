@@ -13,6 +13,10 @@
 * 输入后效果如下：其中标注处即为虚拟机的IP地址。![image-20240120204654307](https://github.com/Fengtao4428/MIT-6.S081/assets/88192248/d9e6783a-71b5-4725-8db2-faca5e76b644)
 * 在主机(windows)的终端中输入命令`ipconfig`，效果如下：IPV4地址即为主机的IP地址。![image-20240120204834585](https://github.com/Fengtao4428/MIT-6.S081/assets/88192248/b819b2e2-d2b4-4a81-8b85-b70a3c11fa83)
 * 能够互相ping通就准备好了。
+* 如果存在ping不通的情况：
+
+> 1. 防火墙问题
+> 2. 不在同一网段下
 
 ## 3.使用VScode连接虚拟机
 

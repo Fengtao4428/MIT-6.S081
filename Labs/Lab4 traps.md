@@ -180,7 +180,7 @@
 
 * XV6在内核中以页面对齐的地址为每个栈分配一个页面。你可以通过`PGROUNDDOWN(fp)`和`PGROUNDUP(fp)`（参见***kernel/riscv.h***）来计算栈页面的顶部和底部地址。这些数字对于`backtrace`终止循环是有帮助的。
 
-* 一旦你的`backtrace`能够运行，就在***kernel/printf.c\***的`panic`中调用它，那样你就可以在`panic`发生时看到内核的`backtrace`。
+* 一旦你的`backtrace`能够运行，就在***kernel/printf.c***的`panic`中调用它，那样你就可以在`panic`发生时看到内核的`backtrace`。
 
 ### 3.实验步骤及代码
 
@@ -230,4 +230,229 @@
 
 * 在***kernel/printf.c***的`panic`中调用`backtrace()`，如下所示：
   ![image-20240415235516422](image-20240415235516422.png)
+
+## Alarm
+
+### 1.实验内容
+
+> 在这个练习中你将向XV6添加一个特性，在进程使用CPU的时间内，XV6定期向进程发出警报。这对于那些希望限制CPU时间消耗的受计算限制的进程，或者对于那些计算的同时执行某些周期性操作的进程可能很有用。更普遍的来说，你将实现用户级中断/故障处理程序的一种初级形式。例如，你可以在应用程序中使用类似的一些东西处理页面故障。如果你的解决方案通过了`alarmtest`和`usertests`就是正确的。
+
+* 应当添加一个新的`sigalarm(interval, handler)`系统调用，如果一个程序调用了`sigalarm(n, fn)`，那么每当程序消耗了CPU时间达到n个“滴答”，内核应当使应用程序函数`fn`被调用。当`fn`返回时，应用应当在它离开的地方恢复执行。在XV6中，一个滴答是一段相当任意的时间单元，取决于硬件计时器生成中断的频率。如果一个程序调用了`sigalarm(0, 0)`，系统应当停止生成周期性的报警调用。
+
+* 在XV6的存储库中找到名为***user/alarmtest.c\***的文件。将其添加到***Makefile\***。注意：你必须添加了`sigalarm`和`sigreturn`系统调用后才能正确编译（往下看）。
+
+* `alarmtest`在`test0`中调用了`sigalarm(2, periodic)`来要求内核每隔两个滴答强制调用`periodic()`，然后旋转一段时间。你可以在***user/alarmtest.asm\***中看到`alarmtest`的汇编代码，这或许会便于调试。当`alarmtest`产生如下输出并且`usertests`也能正常运行时，你的方案就是正确的：
+
+  ```c
+  $ alarmtest
+  test0 start
+  ........alarm!
+  test0 passed
+  test1 start
+  ...alarm!
+  ..alarm!
+  ...alarm!
+  ..alarm!
+  ...alarm!
+  ..alarm!
+  ...alarm!
+  ..alarm!
+  ...alarm!
+  ..alarm!
+  test1 passed
+  test2 start
+  ................alarm!
+  test2 passed
+  $ usertests
+  ...
+  ALL TESTS PASSED
+  $
+  ```
+
+* 当你完成后，你的方案也许仅有几行代码，但如何正确运行是一个棘手的问题。我们将使用原始存储库中的***alarmtest.c***版本测试您的代码。你可以修改***alarmtest.c***来帮助调试，但是要确保原来的`alarmtest`显示所有的测试都通过了。
+
+1. #### **test0: invoke handler(调用处理程序)**
+
+* 首先修改内核以跳转到用户空间中的报警处理程序，这将导致`test0`打印“alarm!”。不用担心输出“alarm!”之后会发生什么；如果您的程序在打印“alarm！”后崩溃，对于目前来说也是正常的。以下是一些**提示**：
+
+  * 您需要修改***Makefile***以使***alarmtest.c***被编译为xv6用户程序。
+
+  * 放入***user/user.h***的正确声明是：
+
+    ```c
+    int sigalarm(int ticks, void (*handler)());
+    int sigreturn(void);
+    ```
+
+  * 更新***user/usys.pl***（此文件生成***user/usys.S***）、***kernel/syscall.h***和***kernel/syscall.c***以允许`alarmtest`调用`sigalarm`和`sigreturn`系统调用。
+
+  * 目前来说，你的`sys_sigreturn`系统调用返回应该是零。
+
+  * 你的`sys_sigalarm()`应该将报警间隔和指向处理程序函数的指针存储在`struct proc`的新字段中（位于***kernel/proc.h***）。
+
+  * 你也需要在`struct proc`新增一个新字段。用于跟踪自上一次调用（或直到下一次调用）到进程的报警处理程序间经历了多少滴答；您可以在***proc.c***的`allocproc()`中初始化`proc`字段。
+
+  * 每一个滴答声，硬件时钟就会强制一个中断，这个中断在***kernel/trap.c***中的`usertrap()`中处理。
+
+  * 如果产生了计时器中断，您只想操纵进程的报警滴答；你需要写类似下面的代码
+
+    ```c
+    if(which_dev == 2) ...
+    ```
+
+  * 仅当进程有未完成的计时器时才调用报警函数。请注意，用户报警函数的地址可能是0（例如，在***user/alarmtest.asm***中，`periodic`位于地址0）。
+
+  * 您需要修改`usertrap()`，以便当进程的报警间隔期满时，用户进程执行处理程序函数。当RISC-V上的陷阱返回到用户空间时，什么决定了用户空间代码恢复执行的指令地址？
+
+  * 如果您告诉qemu只使用一个CPU，那么使用gdb查看陷阱会更容易，这可以通过运行
+
+    ```c
+    make CPUS=1 qemu-gdb
+    ```
+
+  * 如果`alarmtest`打印“alarm!”，则您已成功。
+
+2. **test1/test2(): resume interrupted code(恢复被中断的代码)**
+
+* `alarmtest`打印“alarm!”后，很可能会在`test0`或`test1`中崩溃，或者`alarmtest`（最后）打印“test1 failed”，或者`alarmtest`未打印“test1 passed”就退出。要解决此问题，必须确保完成报警处理程序后返回到用户程序最初被计时器中断的指令执行。必须确保寄存器内容恢复到中断时的值，以便用户程序在报警后可以不受干扰地继续运行。最后，您应该在每次报警计数器关闭后“重新配置”它，以便周期性地调用处理程序。
+* 作为一个起始点，我们为您做了一个设计决策：用户报警处理程序需要在完成后调用`sigreturn`系统调用。请查看***alarmtest.c\***中的`periodic`作为示例。这意味着您可以将代码添加到`usertrap`和`sys_sigreturn`中，这两个代码协同工作，以使用户进程在处理完警报后正确恢复。
+
+### 2.实验过程及代码
+
+#### 1.test0：
+
+* 要实现定期的Alarm，需要通过`test0`，在调用处理程序时，程序计数器的变化如下：
+
+  * `ecall`指令中将PC保存到SEPC
+  * 在`usertrap`中将SEPC保存到`p->trapframe->epc`
+  * `p->trapframe->epc`加4指向下一条指令
+  * 执行系统调用
+  * 在`usertrapret`中将SEPC改写为`p->trapframe->epc`中的值
+  * 在`sret`中将PC设置为SEPC的值
+
+  可见执行系统调用后返回到用户空间继续执行的指令地址是由`p->trapframe->epc`决定的，因此在`usertrap`中主要就是完成它的设置工作。
+
+* 按照提示，修改`Makefile`，让`alarmtest.c`编译成为xv6用户程序，如下：
+  ![image-20240417171403315](image-20240417171403315.png)
+
+* 在放入***user/user.h***声明，如下所示：
+  ![image-20240417171502166](image-20240417171502166.png)
+
+  更新***user/usys.pl***、***kernel/syscall.h***和***kernel/syscall.c***添加`sigalarm`和`sigreturn`系统调用，如下：
+  ![image-20240417171724864](image-20240417171724864.png)
+  ![image-20240417171955769](image-20240417171955769.png)
+  ![image-20240417172050543](image-20240417172050543.png)
+  ![image-20240417172205108](image-20240417172205108.png)
+
+* 在***kernel/sysproc***中定义上述的两个函数，让其先返回0，如下所示：
+  ![image-20240417172441402](image-20240417172441402.png)
+
+* 在`struct proc`中增加字段，同时记得在`allocproc`中将它们初始化为0，并在`freeproc`中也设为0：
+
+  ```
+  int alarm_interval;          // 报警间隔
+  void (*alarm_handler)();     // 报警处理函数
+  int ticks_count;             // 两次报警间的滴答计数
+  ```
+
+  ![image-20240417173242229](image-20240417173242229.png)
+
+* 按照提示，在`usertrap()`添加代码对计时器中断进行处理：
+
+  ```c
+    // give up the CPU if this is a timer interrupt.
+    if(which_dev == 2){
+      if (p->ticks > 0){
+        p->ticks_cnt++;// 计算间隔周期
+        if (p->ticks_cnt > p->ticks){
+          p->ticks_cnt = 0;
+          p->trapframe->epc = p->handler;// 修改下一个指令地址为handler函数
+        }
+      }
+      yield();
+    }
+  ```
+
+*  在`sys_sigalarm`中读取参数：
+
+  ```c
+  uint64
+  sys_sigalarm(void)
+  {
+    int ticks;
+    uint64 handler;
+    argint(0,&ticks);
+    argaddr(0, &handler);
+    struct proc *p = myproc();
+    p->ticks = ticks;
+    p->handler = handler;
+    p->ticks_cnt = 0;
+    return 0;
+  }
+  ```
+
+* 进入xv6输入`alarmtest`，成功打印“alarm”，`test0`通过。
+  ![image-20240417174922013](image-20240417174922013.png)
+
+#### 2. test1/test2(): resume interrupted code
+
+* 为了在`usertrap`中再次保存用户寄存器，当`handler`调用`sigreturn`时将其恢复，并且要防止在`handler`执行过程中重复调用，在`struct proc`中新增两个字段：
+  ![image-20240417183237070](image-20240417183237070.png)
+
+*  在allocproc中设定好相关分配，回收内存的代码：
+
+  ```c
+   if((p->tick_trapframe = (struct trapframe*)kalloc()) == 0) {
+        freeproc(p);
+        release(&p->lock);
+        return 0;
+    }
+    p->isAlarming = 0;
+    p->ticks = 0;
+    p->handler = 0;
+    p->ticks_cnt = 0;
+  ```
+
+*  更改usertrap函数，保存进程陷阱帧`p->trapframe`到`p->alarm_trapframe`
+
+  ```c
+    // give up the CPU if this is a timer interrupt.
+    if(which_dev == 2){
+      if (p->ticks > 0){
+        p->ticks_cnt++;
+        if (p->ticks_cnt > p->ticks && p->isAlarming == 0){
+          p->ticks_cnt = 0;
+          // 保存寄存器中的内容
+          memmove(p->tick_trapframe, p->trapframe, sizeof(struct trapframe));
+          p->trapframe->epc = p->handler;
+          p->ticks_cnt = 0;
+          p->isAlarming = 1;
+        }
+      }
+      yield();
+    }
+  ```
+
+* 完善`sys_sigreturn`，恢复陷阱帧：
+
+  ```c
+  uint64
+  sys_sigreturn(void)
+  {
+    struct proc *p = myproc();
+    memmove(p->trapframe, p->tick_trapframe, sizeof(struct trapframe));
+    p->isAlarming = 0;
+    return 0;
+  }
+  ```
+
+### 3.运行结果
+
+* 进入xv6，输入`alarmtest`，`test0`~`test2`全部passed，如下：
+  ![image-20240417183606212](image-20240417183606212.png)
+
+## 实验结果
+
+* 输入命令`/grade-lab-traps `，所有测试通过，分数为85/85，结果如下：
+  ![image-20240417184052253](image-20240417184052253.png)
 
